@@ -23,9 +23,9 @@ Se comparan tres lecturas: una sin caché, la primera con caché y una segunda l
 
 | Prueba | Tiempo (ms) |
 |---|---:|
-| Sin caché | — |
-| Con caché (primera lectura) | — |
-| Con caché (segunda lectura) | — |
+| Sin caché | 2.882,79 ms |
+| Con caché (primera lectura) | 4.055,48 ms |
+| Con caché (segunda lectura) | 0,24 ms |
 
 Los tiempos se completarán después de ejecutar las pruebas. Se espera que la segunda lectura con caché sea más rápida, ya que evita repetir la consulta a la base de datos.
 
