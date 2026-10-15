@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Caché vs. base de datos</title>
+  <style>
+    :root {
+      --fondo: #f6f7f9;
+      --tarjeta: #ffffff;
+      --texto: #1f2430;
+      --suave: #667085;
+      --borde: #e3e6ec;
+      --azul: #2f6fed;
+      --rojo: #e5484d;
+      --verde: #2faa6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--fondo);
+      color: var(--texto);
+    }
+    main { max-width: 860px; margin: 0 auto; padding: 32px 20px 60px; }
+    h1 { font-size: 1.6rem; margin: 0 0 6px; }
+    .sub { color: var(--suave); margin: 0 0 24px; }
+    .tarjeta {
+      background: var(--tarjeta);
+      border: 1px solid var(--borde);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .botones { display: flex; flex-wrap: wrap; gap: 10px; }
+    button {
+      font: inherit;
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--borde);
+      background: #fff;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { border-color: var(--azul); }
+    button:disabled { opacity: .5; cursor: wait; }
+    button.principal { background: var(--azul); border-color: var(--azul); color: #fff; }
+    #estado { margin-top: 14px; min-height: 1.4em; color: var(--suave); }
+    #estado.error { color: var(--rojo); }
+    h2 { font-size: 1.05rem; margin: 0 0 14px; }
+
+    .fila-barra { display: grid; grid-template-columns: 210px 1fr 90px; gap: 12px; align-items: center; margin-bottom: 10px; }
+    .etiqueta { font-size: .9rem; }
+    .pista { background: #eef0f4; border-radius: 6px; height: 22px; overflow: hidden; }
+    .barra { height: 100%; border-radius: 6px; min-width: 3px; transition: width .4s ease; }
+    .valor { text-align: right; font-variant-numeric: tabular-nums; font-size: .9rem; }
+
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--borde); }
+    th { color: var(--suave); font-weight: 600; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    th.num { text-align: right; }
+    .vacio { color: var(--suave); }
+
+    @media (max-width: 600px) {
+      .fila-barra { grid-template-columns: 1fr; gap: 4px; }
+      .valor { text-align: left; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Leer muchos registros: base de datos vs. caché</h1>
+  <p class="sub">El backend en Spring Boot lee todos los productos con JPA. Aquí se ve cuánto tarda sin caché y con caché.</p>
+
+  <section class="tarjeta">
+    <div class="botones">
+      <button id="btnPrueba" class="principal">Prueba completa (recomendado)</button>
+      <button id="btnSin">Leer sin caché</button>
+      <button id="btnCon">Leer con caché</button>
+      <button id="btnLimpiar">Vaciar caché</button>
+    </div>
+    <div id="estado">Listo. Dale a "Prueba completa" para empezar.</div>
+  </section>
+
+  <section class="tarjeta">
+    <h2>Tiempo en el servidor (ms)</h2>
+    <div id="grafico"><span class="vacio">Todavía no hay mediciones.</span></div>
+  </section>
+
+  <section class="tarjeta">
+    <h2>Historial</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Modo</th>
+          <th class="num">Registros</th>
+          <th class="num">Servidor (ms)</th>
+          <th class="num">Total en el navegador (ms)</th>
+        </tr>
+      </thead>
+      <tbody id="tabla"></tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+  // Dirección del backend. Está en OTRO puerto que esta página => aquí aparece el tema de CORS.
+  const API = 'http://localhost:8080/api';
+
+  const historial = [];
+  const estado = document.getElementById('estado');
+  const botones = document.querySelectorAll('button');
+
+  function etiqueta(r) {
+    if (r.modo === 'SIN_CACHE') return 'Sin caché (va a la base de datos)';
+    return r.desdeCache ? 'Con caché (ya estaba guardado)' : 'Con caché (1ª vez, llena el caché)';
+  }
+
+  function color(r) {
+    if (r.modo === 'SIN_CACHE') return 'var(--rojo)';
+    return r.desdeCache ? 'var(--verde)' : 'var(--azul)';
+  }
+
+  async function llamar(ruta, opciones) {
+    const inicio = performance.now();
+    const respuesta = await fetch(API + ruta, opciones);
+    if (!respuesta.ok) throw new Error('El servidor respondió HTTP ' + respuesta.status);
+    const datos = await respuesta.json();
+    datos.totalNavegadorMs = Math.round((performance.now() - inicio) * 100) / 100;
+    return datos;
+  }
+
+  function registrar(r) {
+    historial.push(r);
+    dibujar();
+  }
+
+  function formato(n) {
+    return n.toLocaleString('es-EC', { maximumFractionDigits: 2 });
+  }
+
+  function dibujar() {
+    const grafico = document.getElementById('grafico');
+    const tabla = document.getElementById('tabla');
+    grafico.innerHTML = '';
+    tabla.innerHTML = '';
+
+    const maximo = Math.max(...historial.map(r => r.tiempoMs), 1);
+
+    historial.forEach((r, i) => {
+      const fila = document.createElement('div');
+      fila.className = 'fila-barra';
+
+      const et = document.createElement('div');
+      et.className = 'etiqueta';
+      et.textContent = (i + 1) + '. ' + etiqueta(r);
+
+      const pista = document.createElement('div');
+      pista.className = 'pista';
+      const barra = document.createElement('div');
+      barra.className = 'barra';
+      barra.style.background = color(r);
+      barra.style.width = Math.max((r.tiempoMs / maximo) * 100, 0.5) + '%';
+      pista.appendChild(barra);
+
+      const val = document.createElement('div');
+      val.className = 'valor';
+      val.textContent = formato(r.tiempoMs) + ' ms';
+
+      fila.append(et, pista, val);
+      grafico.appendChild(fila);
+
+      const tr = document.createElement('tr');
+      const celdas = [
+        [String(i + 1), ''],
+        [etiqueta(r), ''],
+        [formato(r.cantidad), 'num'],
+        [formato(r.tiempoMs), 'num'],
+        [formato(r.totalNavegadorMs), 'num'],
+      ];
+      celdas.forEach(([texto, clase]) => {
+        const td = document.createElement('td');
+        td.textContent = texto;
+        if (clase) td.className = clase;
+        tr.appendChild(td);
+      });
+      tabla.appendChild(tr);
+    });
+  }
+
+  function mostrarError(e) {
+    estado.className = 'error';
+    if (e instanceof TypeError) {
+      // fetch lanza TypeError cuando no hay conexión O cuando el navegador bloquea por CORS
+      estado.textContent = 'No se pudo llamar al backend. ¿Está corriendo en el puerto 8080? ' +
+        'Si sí, puede ser un bloqueo de CORS: abre la consola (F12) y mira el mensaje en rojo.';
+    } else {
+      estado.textContent = e.message;
+    }
+  }
+
+  async function ejecutar(mensaje, tarea) {
+    botones.forEach(b => b.disabled = true);
+    estado.className = '';
+    estado.textContent = mensaje;
+    try {
+      await tarea();
+      estado.textContent = 'Listo.';
+    } catch (e) {
+      mostrarError(e);
+    } finally {
+      botones.forEach(b => b.disabled = false);
+    }
+  }
+
+  document.getElementById('btnSin').onclick = () =>
+    ejecutar('Leyendo desde la base de datos...', async () => registrar(await llamar('/productos/sin-cache')));
+
+  document.getElementById('btnCon').onclick = () =>
+    ejecutar('Leyendo con caché...', async () => registrar(await llamar('/productos/con-cache')));
+
+  document.getElementById('btnLimpiar').onclick = () =>
+    ejecutar('Vaciando caché...', async () => { await llamar('/cache', { method: 'DELETE' }); });
+
+  document.getElementById('btnPrueba').onclick = () =>
+    ejecutar('Corriendo la prueba completa (la primera lectura puede tardar unos segundos)...', async () => {
+      historial.length = 0;
+      await llamar('/cache', { method: 'DELETE' });
+      registrar(await llamar('/productos/sin-cache'));
+      registrar(await llamar('/productos/con-cache'));
+      registrar(await llamar('/productos/con-cache'));
+    });
+</script>
+</body>
+</html>
